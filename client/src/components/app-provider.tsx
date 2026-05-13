@@ -1,143 +1,162 @@
 "use client";
 
 import { createContext, ReactNode, useContext, useMemo, useState } from "react";
-import { JobApplication, User } from "@/lib/models";
-import { getApplications, getUsers, saveApplications, saveUsers } from "@/lib/storage";
+import { User } from "@/lib/models";
+import { apiFetch } from "@/lib/api";
 
 type AppContextType = {
-  users: User[];
-  applications: JobApplication[];
   currentUser: User | null;
-  login: (email: string, password: string) => { ok: boolean; message: string };
-  register: (name: string, email: string, password: string) => { ok: boolean; message: string };
+  login: (email: string, password: string) => Promise<{ ok: boolean; message: string }>;
+  register: (name: string, email: string, password: string) => Promise<{ ok: boolean; message: string }>;
   logout: () => void;
   addManualUser: (
     name: string,
     email: string,
     password: string,
     role: "user" | "admin"
-  ) => { ok: boolean; message: string };
+  ) => Promise<{ ok: boolean; message: string }>;
   submitApplication: (input: {
     position: string;
     skills: string;
     message: string;
-  }) => { ok: boolean; message: string };
+  }) => Promise<{ ok: boolean; message: string }>;
 };
 
 const CURRENT_USER_KEY = "campus_ai_current_user";
 
-const AppContext = createContext<AppContextType | null>(null);
-
-function createId(prefix: string) {
-  return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
+function isMongoObjectId(id: string): boolean {
+  return /^[a-f\d]{24}$/i.test(id);
 }
 
-function getInitialUsers() {
-  return getUsers();
-}
-
-function getInitialApplications() {
-  return getApplications();
-}
-
-function getInitialCurrentUser(users: User[]) {
+function readStoredUser(): User | null {
   if (typeof window === "undefined") {
     return null;
   }
-  const rawCurrentUser = window.localStorage.getItem(CURRENT_USER_KEY);
-  if (!rawCurrentUser) {
+  const raw = window.localStorage.getItem(CURRENT_USER_KEY);
+  if (!raw) {
     return null;
   }
   try {
-    const parsed = JSON.parse(rawCurrentUser) as User;
-    return users.find((user) => user.id === parsed.id) ?? null;
+    const parsed = JSON.parse(raw) as User;
+    if (!parsed?.id || !parsed.email || !parsed.role) {
+      return null;
+    }
+    if (!isMongoObjectId(parsed.id)) {
+      window.localStorage.removeItem(CURRENT_USER_KEY);
+      return null;
+    }
+    return {
+      id: parsed.id,
+      name: parsed.name,
+      email: parsed.email,
+      role: parsed.role,
+    };
   } catch {
     return null;
   }
 }
 
+function persistUser(user: User | null) {
+  if (typeof window === "undefined") {
+    return;
+  }
+  if (!user) {
+    window.localStorage.removeItem(CURRENT_USER_KEY);
+    return;
+  }
+  window.localStorage.setItem(
+    CURRENT_USER_KEY,
+    JSON.stringify({
+      id: user.id,
+      name: user.name,
+      email: user.email,
+      role: user.role,
+    })
+  );
+}
+
+const AppContext = createContext<AppContextType | null>(null);
+
 export function AppProvider({ children }: { children: ReactNode }) {
-  const [users, setUsers] = useState<User[]>(() => getInitialUsers());
-  const [applications, setApplications] = useState<JobApplication[]>(() =>
-    getInitialApplications()
-  );
-  const [currentUser, setCurrentUser] = useState<User | null>(() =>
-    getInitialCurrentUser(getInitialUsers())
-  );
+  const [currentUser, setCurrentUser] = useState<User | null>(() => readStoredUser());
 
   const value = useMemo<AppContextType>(
     () => ({
-      users,
-      applications,
       currentUser,
-      login(email, password) {
-        const user = users.find((item) => item.email === email && item.password === password);
-        if (!user) {
-          return { ok: false, message: "Invalid email or password." };
+      async login(email, password) {
+        try {
+          const data = await apiFetch<{ user: User }>("/api/auth/login", {
+            method: "POST",
+            body: JSON.stringify({ email, password }),
+          });
+          const sessionUser: User = {
+            id: data.user.id,
+            name: data.user.name,
+            email: data.user.email,
+            role: data.user.role,
+          };
+          setCurrentUser(sessionUser);
+          persistUser(sessionUser);
+          return { ok: true, message: "Login successful." };
+        } catch (err) {
+          const message = err instanceof Error ? err.message : "Login failed.";
+          return { ok: false, message };
         }
-        setCurrentUser(user);
-        window.localStorage.setItem(CURRENT_USER_KEY, JSON.stringify(user));
-        return { ok: true, message: "Login successful." };
       },
-      register(name, email, password) {
-        const exists = users.some((item) => item.email.toLowerCase() === email.toLowerCase());
-        if (exists) {
-          return { ok: false, message: "User already exists with this email." };
+      async register(name, email, password) {
+        try {
+          await apiFetch<{ user: User }>("/api/auth/register", {
+            method: "POST",
+            body: JSON.stringify({ name, email, password }),
+          });
+          return { ok: true, message: "Account created. Please login." };
+        } catch (err) {
+          const message = err instanceof Error ? err.message : "Registration failed.";
+          return { ok: false, message };
         }
-        const newUser: User = {
-          id: createId("user"),
-          name,
-          email,
-          password,
-          role: "user",
-        };
-        const nextUsers = [...users, newUser];
-        setUsers(nextUsers);
-        saveUsers(nextUsers);
-        return { ok: true, message: "Account created. Please login." };
       },
       logout() {
         setCurrentUser(null);
-        window.localStorage.removeItem(CURRENT_USER_KEY);
+        persistUser(null);
       },
-      addManualUser(name, email, password, role) {
-        const exists = users.some((item) => item.email.toLowerCase() === email.toLowerCase());
-        if (exists) {
-          return { ok: false, message: "A user with this email already exists." };
+      async addManualUser(name, email, password, role) {
+        if (!currentUser?.id) {
+          return { ok: false, message: "Not authenticated." };
         }
-        const newUser: User = {
-          id: createId("user"),
-          name,
-          email,
-          password,
-          role,
-        };
-        const nextUsers = [...users, newUser];
-        setUsers(nextUsers);
-        saveUsers(nextUsers);
-        return { ok: true, message: "User added successfully." };
+        try {
+          await apiFetch<{ user: User }>("/api/admin/users", {
+            method: "POST",
+            userId: currentUser.id,
+            body: JSON.stringify({ name, email, password, role }),
+          });
+          return { ok: true, message: "User added successfully." };
+        } catch (err) {
+          const message = err instanceof Error ? err.message : "Could not add user.";
+          return { ok: false, message };
+        }
       },
-      submitApplication(input) {
-        if (!currentUser) {
+      async submitApplication(input) {
+        if (!currentUser?.id) {
           return { ok: false, message: "Please login before applying." };
         }
-        const newApplication: JobApplication = {
-          id: createId("app"),
-          userId: currentUser.id,
-          userName: currentUser.name,
-          email: currentUser.email,
-          position: input.position,
-          skills: input.skills,
-          message: input.message,
-          createdAt: new Date().toISOString(),
-        };
-        const nextApplications = [newApplication, ...applications];
-        setApplications(nextApplications);
-        saveApplications(nextApplications);
-        return { ok: true, message: "Application submitted successfully." };
+        try {
+          await apiFetch("/api/applications", {
+            method: "POST",
+            userId: currentUser.id,
+            body: JSON.stringify({
+              position: input.position,
+              skills: input.skills,
+              message: input.message,
+            }),
+          });
+          return { ok: true, message: "Application submitted successfully." };
+        } catch (err) {
+          const message = err instanceof Error ? err.message : "Submit failed.";
+          return { ok: false, message };
+        }
       },
     }),
-    [applications, currentUser, users]
+    [currentUser]
   );
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;

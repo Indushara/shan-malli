@@ -12,17 +12,27 @@ export default function LoginPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [status, setStatus] = useState("");
+  const [pending, setPending] = useState(false);
 
-  function onSubmit(event: FormEvent<HTMLFormElement>) {
+  async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const result =
-      mode === "login" ? login(email, password) : register(name, email, password);
-    setStatus(result.message);
-    if (mode === "login" && result.ok) {
-      router.push("/apply");
-    }
-    if (mode === "register" && result.ok) {
-      setMode("login");
+    setPending(true);
+    try {
+      if (mode === "login") {
+        const result = await login(email, password);
+        setStatus(result.message);
+        if (result.ok) {
+          router.push("/apply");
+        }
+      } else {
+        const result = await register(name, email, password);
+        setStatus(result.message);
+        if (result.ok) {
+          setMode("login");
+        }
+      }
+    } finally {
+      setPending(false);
     }
   }
 
@@ -31,7 +41,7 @@ export default function LoginPage() {
       <div className="card mx-auto max-w-md animate-fade-in">
         <h1 className="text-2xl font-bold">{mode === "login" ? "Login" : "Create Account"}</h1>
         <p className="mt-1 text-xs text-slate-500">
-          Demo admin: admin@campus.ai / admin123
+          API auth — seed admin: admin@campus.ai / admin123 (run server once to seed MongoDB)
         </p>
         <form onSubmit={onSubmit} className="mt-4 space-y-3">
           {mode === "register" && (
@@ -59,8 +69,12 @@ export default function LoginPage() {
             onChange={(event) => setPassword(event.target.value)}
             required
           />
-          <button className="w-full rounded-lg bg-gradient-to-r from-slate-900 to-indigo-700 px-4 py-2 text-white" type="submit">
-            {mode === "login" ? "Login" : "Register"}
+          <button
+            className="w-full rounded-lg bg-gradient-to-r from-slate-900 to-indigo-700 px-4 py-2 text-white disabled:opacity-60"
+            type="submit"
+            disabled={pending}
+          >
+            {pending ? "Please wait…" : mode === "login" ? "Login" : "Register"}
           </button>
         </form>
         {status && <p className="mt-3 text-sm text-slate-700">{status}</p>}

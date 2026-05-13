@@ -1,23 +1,55 @@
 "use client";
 
 import Link from "next/link";
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 import { useApp } from "@/components/app-provider";
+import { apiFetch } from "@/lib/api";
+import type { JobPosting } from "@/lib/models";
 
 export default function ApplyPage() {
   const { currentUser, submitApplication } = useApp();
-  const [position, setPosition] = useState("AI Intern");
+  const [jobs, setJobs] = useState<JobPosting[]>([]);
+  const [position, setPosition] = useState("");
   const [skills, setSkills] = useState("");
   const [message, setMessage] = useState("");
   const [status, setStatus] = useState("");
+  const [pending, setPending] = useState(false);
 
-  function onSubmit(event: FormEvent<HTMLFormElement>) {
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const list = await apiFetch<JobPosting[]>("/api/jobs");
+        if (!cancelled) {
+          setJobs(list);
+          if (list.length > 0) {
+            setPosition(list[0].title);
+          }
+        }
+      } catch {
+        if (!cancelled) {
+          setJobs([]);
+          setPosition((p) => p || "AI Intern");
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const result = submitApplication({ position, skills, message });
-    setStatus(result.message);
-    if (result.ok) {
-      setSkills("");
-      setMessage("");
+    setPending(true);
+    try {
+      const result = await submitApplication({ position, skills, message });
+      setStatus(result.message);
+      if (result.ok) {
+        setSkills("");
+        setMessage("");
+      }
+    } finally {
+      setPending(false);
     }
   }
 
@@ -35,6 +67,8 @@ export default function ApplyPage() {
     );
   }
 
+  const fallbackTitles = ["AI Intern", "Frontend Developer", "ML Engineer", "Data Analyst"];
+
   return (
     <section className="page-container stagger-in space-y-5">
       <div className="card animate-fade-in">
@@ -48,11 +82,19 @@ export default function ApplyPage() {
           value={position}
           onChange={(event) => setPosition(event.target.value)}
           className="w-full rounded-lg border px-3 py-2"
+          required
         >
-          <option>AI Intern</option>
-          <option>Frontend Developer</option>
-          <option>ML Engineer</option>
-          <option>Data Analyst</option>
+          {jobs.length === 0
+            ? fallbackTitles.map((title) => (
+                <option key={title} value={title}>
+                  {title}
+                </option>
+              ))
+            : jobs.map((job) => (
+                <option key={job.id} value={job.title}>
+                  {job.title} — {job.department}
+                </option>
+              ))}
         </select>
         <input
           value={skills}
@@ -68,8 +110,12 @@ export default function ApplyPage() {
           placeholder="Why are you a good fit?"
           required
         />
-        <button type="submit" className="rounded-lg bg-gradient-to-r from-emerald-600 to-teal-600 px-4 py-2 text-white">
-          Submit Application
+        <button
+          type="submit"
+          className="rounded-lg bg-gradient-to-r from-emerald-600 to-teal-600 px-4 py-2 text-white disabled:opacity-60"
+          disabled={pending}
+        >
+          {pending ? "Submitting…" : "Submit Application"}
         </button>
         {status && <p className="text-sm font-medium text-slate-700">{status}</p>}
       </form>

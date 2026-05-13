@@ -1,8 +1,17 @@
-import "dotenv/config";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import dotenv from "dotenv";
 import cors from "cors";
 import express from "express";
 import { connectDb } from "./db.js";
-import { Example } from "./models/Example.js";
+import { seedDatabase } from "./seed.js";
+import authRoutes from "./routes/auth.js";
+import jobsPublicRoutes from "./routes/jobsPublic.js";
+import applicationsPublicRoutes from "./routes/applicationsPublic.js";
+import adminRoutes from "./routes/admin.js";
+
+const serverRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+dotenv.config({ path: path.join(serverRoot, ".env") });
 
 const app = express();
 const port = Number(process.env.PORT) || 4000;
@@ -14,23 +23,14 @@ app.get("/health", (_req, res) => {
   res.json({ ok: true });
 });
 
-app.get("/api/examples", async (_req, res) => {
-  const items = await Example.find().sort({ createdAt: -1 }).limit(50).lean();
-  res.json(items);
-});
-
-app.post("/api/examples", async (req, res) => {
-  const name = typeof req.body?.name === "string" ? req.body.name.trim() : "";
-  if (!name) {
-    res.status(400).json({ error: "name is required" });
-    return;
-  }
-  const doc = await Example.create({ name });
-  res.status(201).json(doc);
-});
+app.use("/api/auth", authRoutes);
+app.use("/api/jobs", jobsPublicRoutes);
+app.use("/api/applications", applicationsPublicRoutes);
+app.use("/api/admin", adminRoutes);
 
 async function main() {
   await connectDb();
+  await seedDatabase();
   app.listen(port, () => {
     console.log(`API listening on http://localhost:${port}`);
   });
